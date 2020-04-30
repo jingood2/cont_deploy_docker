@@ -23,8 +23,8 @@ export class ContDeployDockerStack extends Stack {
     let buildOutput: Artifact;
 
     //Place resource definitions here.
-    var vpc = new Vpc(this, 'swypVpc', {
-      cidr: '10.0.0.0/16',
+    var vpc = new Vpc(this, 'my.vpc', {
+      cidr: '20.0.0.0/16',
       maxAzs: 2,
       //natGateways: 1,
       subnetConfiguration: [{
@@ -46,7 +46,8 @@ export class ContDeployDockerStack extends Stack {
       clusterName: "my-ecs-cluster",
     });
 
-    var s3Bucket = this.createArtifactBucket("my-s3bucket");
+  
+    var s3Bucket = this.createArtifactBucket("my-s3bucket-" +   Math.floor(Math.random() * Math.floor(999999999)));
     var pipelineProject = this.createPipelineProject(s3Bucket, ecrRepository);
     pipelineProject.role?.addManagedPolicy(ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryPowerUser'));
 
@@ -186,8 +187,7 @@ export class ContDeployDockerStack extends Stack {
       actionName: 'my_github_source',
       owner: 'logemann',
       repo: 'HelloWorldWebApp',
-      //better --> oauthToken: SecretValue.secretsManager('github/oauth/token'),
-      oauthToken: SecretValue.plainText('dab2748098adef93eb2ec6d886faf106119eb404'),
+      oauthToken: SecretValue.secretsManager('github/oauth/token'),
       output: sourceOutput,
       branch: 'master', // default: 'master'
     });
@@ -202,7 +202,7 @@ export class ContDeployDockerStack extends Stack {
   public createHelloWorldBuildAction(pipelineProject: codebuild.PipelineProject, sourceInput: Artifact,
     buildOutput: Artifact): CodeBuildAction {
     var buildAction = new CodeBuildAction({
-      actionName: 'Swyp_Gradle_Build',
+      actionName: 'HelloWorldWebAppBuild',
       project: pipelineProject,
       input: sourceInput,
       outputs: [buildOutput],
