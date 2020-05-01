@@ -4,5 +4,5 @@ import * as cdk from '@aws-cdk/core';
 import { ContDeployDockerStack } from '../lib/cont_deploy_docker-stack';
 
 const app = new cdk.App();
-new ContDeployDockerStack(app, 'ContDeployDockerStack');
+new ContDeployDockerStack(app, 'ContDeployStack');
 app.synth;

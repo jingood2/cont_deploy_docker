@@ -1,7 +1,8 @@
 import { Stack, StackProps, Construct, SecretValue } from '@aws-cdk/core';
-import { SubnetType, Vpc } from '@aws-cdk/aws-ec2';
+import { Vpc } from '@aws-cdk/aws-ec2';
 import * as ecr from '@aws-cdk/aws-ecr';
 import * as ecs from '@aws-cdk/aws-ecs';
+import * as ecspatterns from '@aws-cdk/aws-ecs-patterns';
 import * as codebuild from '@aws-cdk/aws-codebuild';
 import { Bucket, BlockPublicAccess, BucketEncryption } from '@aws-cdk/aws-s3';
 import { Duration } from '@aws-cdk/core';
@@ -9,10 +10,11 @@ import { ManagedPolicy } from '@aws-cdk/aws-iam';
 import { Artifact, Pipeline } from '@aws-cdk/aws-codepipeline';
 import {
   GitHubSourceAction, S3DeployAction, LambdaInvokeAction,
-  CodeBuildAction, S3SourceAction
+  CodeBuildAction, S3SourceAction, EcsDeployAction
 } from '@aws-cdk/aws-codepipeline-actions';
 
 
+const repoName = "hello-world-webapp";
 
 export class ContDeployDockerStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -22,32 +24,21 @@ export class ContDeployDockerStack extends Stack {
     let source2_Output: Artifact;
     let buildOutput: Artifact;
 
+
     //Place resource definitions here.
     var vpc = new Vpc(this, 'my.vpc', {
-      cidr: '20.0.0.0/16',
-      maxAzs: 2,
-      //natGateways: 1,
-      subnetConfiguration: [{
-        cidrMask: 26,
-        name: 'isolatedSubnet',
-        subnetType: SubnetType.ISOLATED,
-      }],
+      cidr: '10.0.0.0/16',
+      maxAzs: 2
     });
 
 
     // ECR repository
-    const ecrRepository = new ecr.Repository(this, "my-ecr-repo", {
-      repositoryName: "my-ecr-repo",
+    const ecrRepository = new ecr.Repository(this, repoName, {
+      repositoryName: repoName,
     });
 
-    // ECS Cluster
-    const cluster = new ecs.Cluster(this, "my-ecs-cluster", {
-      vpc: vpc,
-      clusterName: "my-ecs-cluster",
-    });
 
-  
-    var s3Bucket = this.createArtifactBucket("my-s3bucket-" +   Math.floor(Math.random() * Math.floor(999999999)));
+    var s3Bucket = this.createArtifactBucket("my-s3bucket", "my-s3bucket-" + this.account);
     var pipelineProject = this.createPipelineProject(s3Bucket, ecrRepository);
     pipelineProject.role?.addManagedPolicy(ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryPowerUser'));
 
@@ -56,33 +47,33 @@ export class ContDeployDockerStack extends Stack {
 
     var githubSourceAction = this.createHelloWorldGithubSourceAction(sourceOutput);
     var buildAction = this.createHelloWorldBuildAction(pipelineProject, sourceOutput, buildOutput);
+    var ecsDeployAction = this.createEcsDeployAction(vpc, ecrRepository, buildOutput);
 
-    var pipeline = new Pipeline(this, 'my_pipeline', {
+    var pipeline = new Pipeline(this, 'my_pipeline_', {
       stages: [
-          {
-              stageName: 'Source',
-              actions: [githubSourceAction]
-          },
-          {
-              stageName: 'Build',
-              actions: [buildAction]
-          },
-          /*
-          {
-              stageName: 'Deploy',
-              actions: [s3DeployAction]
-          },
-
-          {
-              stageName: 'Notify',
-              actions: [postToSlackAction]
-          }
-          */
+        {
+          stageName: 'Source',
+          actions: [githubSourceAction]
+        },
+        {
+          stageName: 'Build',
+          actions: [buildAction]
+        },
+        {
+          stageName: 'Deploy',
+          actions: [ecsDeployAction]
+        },
+        /*
+        {
+            stageName: 'Notify',
+            actions: [postToSlackAction]
+        }
+        */
       ],
       pipelineName: "my_pipeline",
       //artifactBucket: artifactBucket
-  });
-  
+    });
+
   }
 
   // ----------------------- some helper methods -----------------------
@@ -99,13 +90,10 @@ export class ContDeployDockerStack extends Stack {
       },
       environmentVariables: {
         'IMAGE_REPO_NAME': {
-          value: "hello-world-webapp"
-        },
-        "IMAGE_TAG": {
-          value: "latest"
+          value: repoName
         },
         "ECR_REPO": {
-          value: ecrRepo.repositoryName
+          value: ecrRepo.repositoryUriForTag()
         }
       },
       buildSpec: codebuild.BuildSpec.fromObject({
@@ -123,14 +111,20 @@ export class ContDeployDockerStack extends Stack {
             commands: [
               'echo Logging in to Amazon ECR...',
               '$(aws ecr get-login --no-include-email)',
+              'COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)',
+              'IMAGE_TAG=${COMMIT_HASH:=latest}'
             ],
           },
           build: {
             commands: [
               'echo Build started on `date`',
               './gradlew bootJar',
-              'docker build -f docker/Dockerfile -t $IMAGE_REPO_NAME:$IMAGE_TAG .',
-              'docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $ECR_REPO:$IMAGE_TAG',
+              'echo Building Docker Image $ECR_REPO:latest',
+              'docker build -f docker/Dockerfile -t $ECR_REPO:latest .',
+              'echo Tagging Docker Image $ECR_REPO:latest with $ECR_REPO:$IMAGE_TAG',
+              'docker tag $ECR_REPO:latest $ECR_REPO:$IMAGE_TAG',
+              'echo Pushing Docker Image to $ECR_REPO:latest and $ECR_REPO:$IMAGE_TAG',
+              'docker push $ECR_REPO:latest',
               'docker push $ECR_REPO:$IMAGE_TAG'
             ],
             finally: [
@@ -139,13 +133,15 @@ export class ContDeployDockerStack extends Stack {
           },
           post_build: {
             commands: [
+              "echo creating imagedefinitions.json dynamically",
+              "printf '[{'name':'hello-world','imageUri':'%s'}]' $ECR_REPO:$IMAGE_TAG > imagedefinitions.json",
               "echo Build completed on `date`"
             ]
           }
         },
         artifacts: {
           files: [
-            "build/libs/HelloWorldWebapp-0.0.1-SNAPSHOT.jar"
+            "imagedefinitions.json"
           ]
         },
         cache: {
@@ -163,12 +159,12 @@ export class ContDeployDockerStack extends Stack {
    * creates a S3 Bucket
    * @param domainName bucketName
    */
-  createArtifactBucket(domainName: string) {
+  createArtifactBucket(id: string, buckeName: string) {
     // Content bucket
-    return new Bucket(this, domainName, {
+    return new Bucket(this, id, {
       versioned: false,
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
-      bucketName: domainName,
+      bucketName: buckeName,
       publicReadAccess: false,
       encryption: BucketEncryption.S3_MANAGED,
       lifecycleRules: [{
@@ -196,19 +192,42 @@ export class ContDeployDockerStack extends Stack {
   /**
    * Creates the BuildAction for Codepipeline build step
    * @param pipelineProject pipelineProject to use 
-   * @param sourceInput input to build
+   * @param sourceActionOutput input to build
    * @param buildOutput where to put the ouput
    */
-  public createHelloWorldBuildAction(pipelineProject: codebuild.PipelineProject, sourceInput: Artifact,
+  public createHelloWorldBuildAction(pipelineProject: codebuild.PipelineProject, sourceActionOutput: Artifact,
     buildOutput: Artifact): CodeBuildAction {
     var buildAction = new CodeBuildAction({
       actionName: 'HelloWorldWebAppBuild',
       project: pipelineProject,
-      input: sourceInput,
+      input: sourceActionOutput,
       outputs: [buildOutput],
 
     });
     return buildAction;
+  }
+
+  public createEcsDeployAction(vpc: Vpc, ecrRepo: ecr.Repository, buildOutput : Artifact): EcsDeployAction {
+    return new EcsDeployAction({
+      actionName: 'EcsDeployAction',
+      service: this.createLoadBalancedFargateService(this, vpc, ecrRepo).service,
+      input: buildOutput,
+    })
+  };
+
+
+  createLoadBalancedFargateService(scope: Construct, vpc: Vpc, ecrRepository: ecr.Repository) {
+    return new ecspatterns.ApplicationLoadBalancedFargateService(scope, 'myLbFargateService', {
+      vpc: vpc,
+      memoryLimitMiB: 512,
+      cpu: 256,
+      assignPublicIp: true,
+      // listenerPort: 8080,  
+      taskImageOptions: {
+        image: ecs.ContainerImage.fromEcrRepository(ecrRepository, "latest"),
+        containerPort: 8080,
+      },
+    });
   }
 
 }
