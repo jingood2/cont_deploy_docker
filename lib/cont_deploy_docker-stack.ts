@@ -89,9 +89,6 @@ export class ContDeployDockerStack extends Stack {
         privileged: true
       },
       environmentVariables: {
-        'IMAGE_REPO_NAME': {
-          value: repoName
-        },
         "ECR_REPO": {
           value: ecrRepo.repositoryUriForTag()
         }
@@ -134,7 +131,7 @@ export class ContDeployDockerStack extends Stack {
           post_build: {
             commands: [
               "echo creating imagedefinitions.json dynamically",
-              "printf '[{'name':'hello-world','imageUri':'%s'}]' $ECR_REPO:$IMAGE_TAG > imagedefinitions.json",
+              "printf '[{\"name\":\"" + repoName + "\",\"imageUri\": \""+ ecrRepo.repositoryUriForTag() + ":latest\"}]' > imagedefinitions.json",
               "echo Build completed on `date`"
             ]
           }
@@ -224,6 +221,7 @@ export class ContDeployDockerStack extends Stack {
       assignPublicIp: true,
       // listenerPort: 8080,  
       taskImageOptions: {
+        containerName: repoName,
         image: ecs.ContainerImage.fromEcrRepository(ecrRepository, "latest"),
         containerPort: 8080,
       },
