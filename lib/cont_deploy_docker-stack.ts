@@ -4,15 +4,10 @@ import * as ecr from '@aws-cdk/aws-ecr';
 import * as ecs from '@aws-cdk/aws-ecs';
 import * as ecspatterns from '@aws-cdk/aws-ecs-patterns';
 import * as codebuild from '@aws-cdk/aws-codebuild';
-import { Bucket, BlockPublicAccess, BucketEncryption } from '@aws-cdk/aws-s3';
-import { Duration } from '@aws-cdk/core';
 import { ManagedPolicy } from '@aws-cdk/aws-iam';
 import { Artifact, Pipeline } from '@aws-cdk/aws-codepipeline';
-import {
-  GitHubSourceAction, S3DeployAction, LambdaInvokeAction,
-  CodeBuildAction, S3SourceAction, EcsDeployAction
-} from '@aws-cdk/aws-codepipeline-actions';
-import { Secret } from '@aws-cdk/aws-ecs';
+import { GitHubSourceAction, CodeBuildAction, EcsDeployAction} from '@aws-cdk/aws-codepipeline-actions';
+import { PipelineProject, LocalCacheMode } from '@aws-cdk/aws-codebuild';
 
 
 const repoName = "hello-world-webapp";
@@ -37,8 +32,7 @@ export class ContDeployDockerStack extends Stack {
       repositoryName: repoName,
     });
 
-    var s3Bucket = this.createArtifactBucket("my-s3bucket", "my-s3bucket-" + this.account);
-    var pipelineProject = this.createPipelineProject(s3Bucket, ecrRepository);
+    var pipelineProject = this.createPipelineProject(ecrRepository);
     pipelineProject.role?.addManagedPolicy(ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryPowerUser'));
 
     sourceOutput = new Artifact();
@@ -46,7 +40,7 @@ export class ContDeployDockerStack extends Stack {
 
     var githubSourceAction = this.createHelloWorldGithubSourceAction(sourceOutput, oauthToken);
     var buildAction = this.createHelloWorldBuildAction(pipelineProject, sourceOutput, buildOutput);
-    var ecsDeployAction = this.createEcsDeployAction(vpc, ecrRepository, buildOutput);
+    var ecsDeployAction = this.createEcsDeployAction(vpc, ecrRepository, buildOutput, pipelineProject);
 
     var pipeline = new Pipeline(this, 'my_pipeline_', {
       stages: [
@@ -72,9 +66,8 @@ export class ContDeployDockerStack extends Stack {
   // ----------------------- some helper methods -----------------------
   /**
    * create the Pipeline Project wuth Buildspec and stuff
-   * @param s3Stack s3Stack where S3 Buckets reside
    */
-  private createPipelineProject(s3Bucket: Bucket, ecrRepo: ecr.Repository): codebuild.PipelineProject {
+  private createPipelineProject(ecrRepo: ecr.Repository): codebuild.PipelineProject {
     var pipelineProject = new codebuild.PipelineProject(this, 'my-codepipeline', {
       projectName: "my-codepipeline",
       environment: {
@@ -125,6 +118,7 @@ export class ContDeployDockerStack extends Stack {
             commands: [
               "echo creating imagedefinitions.json dynamically",
               "printf '[{\"name\":\"" + repoName + "\",\"imageUri\": \"" + ecrRepo.repositoryUriForTag() + ":latest\"}]' > imagedefinitions.json",
+              //'XX="$(ls -l /root/.gradle/)"; printf "%s\n" "$XX"',
               "echo Build completed on `date`"
             ]
           }
@@ -136,32 +130,13 @@ export class ContDeployDockerStack extends Stack {
         },
         cache: {
           paths: [
-            '/root/.gradle/**/*'
+            '/root/.gradle/**/*',
           ]
-        }
+       }
       }),
-      cache: codebuild.Cache.bucket(s3Bucket, { prefix: "depsCache" })
+      cache: codebuild.Cache.local(LocalCacheMode.DOCKER_LAYER, LocalCacheMode.CUSTOM)
     });
     return pipelineProject;
-  }
-
-  /**
-   * creates a S3 Bucket
-   * @param domainName bucketName
-   */
-  createArtifactBucket(id: string, buckeName: string) {
-    // Content bucket
-    return new Bucket(this, id, {
-      versioned: false,
-      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
-      bucketName: buckeName,
-      publicReadAccess: false,
-      encryption: BucketEncryption.S3_MANAGED,
-      lifecycleRules: [{
-        expiration: Duration.days(30)
-      }]
-    });
-
   }
 
   /**
@@ -197,16 +172,16 @@ export class ContDeployDockerStack extends Stack {
     return buildAction;
   }
 
-  public createEcsDeployAction(vpc: Vpc, ecrRepo: ecr.Repository, buildOutput: Artifact): EcsDeployAction {
+  public createEcsDeployAction(vpc: Vpc, ecrRepo: ecr.Repository, buildOutput: Artifact, pipelineProject: PipelineProject): EcsDeployAction {
     return new EcsDeployAction({
       actionName: 'EcsDeployAction',
-      service: this.createLoadBalancedFargateService(this, vpc, ecrRepo).service,
+      service: this.createLoadBalancedFargateService(this, vpc, ecrRepo, pipelineProject).service,
       input: buildOutput,
     })
   };
 
-  createLoadBalancedFargateService(scope: Construct, vpc: Vpc, ecrRepository: ecr.Repository) {
-    return new ecspatterns.ApplicationLoadBalancedFargateService(scope, 'myLbFargateService', {
+  createLoadBalancedFargateService(scope: Construct, vpc: Vpc, ecrRepository: ecr.Repository, pipelineProject: PipelineProject) {
+    var fargateService = new ecspatterns.ApplicationLoadBalancedFargateService(scope, 'myLbFargateService', {
       vpc: vpc,
       memoryLimitMiB: 512,
       cpu: 256,
@@ -214,9 +189,11 @@ export class ContDeployDockerStack extends Stack {
       // listenerPort: 8080,  
       taskImageOptions: {
         containerName: repoName,
-        image: ecs.ContainerImage.fromEcrRepository(ecrRepository, "latest"),
+        image: ecs.ContainerImage.fromRegistry("hello-world"),
         containerPort: 8080,
       },
     });
+    fargateService.taskDefinition.executionRole?.addManagedPolicy((ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryPowerUser')));
+    return fargateService;
   }
 }
