@@ -12,6 +12,7 @@ import {
   GitHubSourceAction, S3DeployAction, LambdaInvokeAction,
   CodeBuildAction, S3SourceAction, EcsDeployAction
 } from '@aws-cdk/aws-codepipeline-actions';
+import { Secret } from '@aws-cdk/aws-ecs';
 
 
 const repoName = "hello-world-webapp";
@@ -19,6 +20,8 @@ const repoName = "hello-world-webapp";
 export class ContDeployDockerStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
+
+    var oauthToken = SecretValue.secretsManager('github/oauth/token');
 
     let sourceOutput: Artifact;
     let buildOutput: Artifact;
@@ -41,7 +44,7 @@ export class ContDeployDockerStack extends Stack {
     sourceOutput = new Artifact();
     buildOutput = new Artifact();
 
-    var githubSourceAction = this.createHelloWorldGithubSourceAction(sourceOutput);
+    var githubSourceAction = this.createHelloWorldGithubSourceAction(sourceOutput, oauthToken);
     var buildAction = this.createHelloWorldBuildAction(pipelineProject, sourceOutput, buildOutput);
     var ecsDeployAction = this.createEcsDeployAction(vpc, ecrRepository, buildOutput);
 
@@ -121,7 +124,7 @@ export class ContDeployDockerStack extends Stack {
           post_build: {
             commands: [
               "echo creating imagedefinitions.json dynamically",
-              "printf '[{\"name\":\"" + repoName + "\",\"imageUri\": \""+ ecrRepo.repositoryUriForTag() + ":latest\"}]' > imagedefinitions.json",
+              "printf '[{\"name\":\"" + repoName + "\",\"imageUri\": \"" + ecrRepo.repositoryUriForTag() + ":latest\"}]' > imagedefinitions.json",
               "echo Build completed on `date`"
             ]
           }
@@ -165,12 +168,12 @@ export class ContDeployDockerStack extends Stack {
    * creates Github Source
    * @param sourceOutput where to put the clones Repository
    */
-  public createHelloWorldGithubSourceAction(sourceOutput: Artifact): GitHubSourceAction {
+  public createHelloWorldGithubSourceAction(sourceOutput: Artifact, oauthToken: SecretValue): GitHubSourceAction {
     return new GitHubSourceAction({
       actionName: 'my_github_source',
       owner: 'logemann',
       repo: 'HelloWorldWebApp',
-      oauthToken: SecretValue.secretsManager('github/oauth/token'),
+      oauthToken: oauthToken,
       output: sourceOutput,
       branch: 'master', // default: 'master'
     });
@@ -194,7 +197,7 @@ export class ContDeployDockerStack extends Stack {
     return buildAction;
   }
 
-  public createEcsDeployAction(vpc: Vpc, ecrRepo: ecr.Repository, buildOutput : Artifact): EcsDeployAction {
+  public createEcsDeployAction(vpc: Vpc, ecrRepo: ecr.Repository, buildOutput: Artifact): EcsDeployAction {
     return new EcsDeployAction({
       actionName: 'EcsDeployAction',
       service: this.createLoadBalancedFargateService(this, vpc, ecrRepo).service,
