@@ -21,9 +21,7 @@ export class ContDeployDockerStack extends Stack {
     super(scope, id, props);
 
     let sourceOutput: Artifact;
-    let source2_Output: Artifact;
     let buildOutput: Artifact;
-
 
     //Place resource definitions here.
     var vpc = new Vpc(this, 'my.vpc', {
@@ -31,12 +29,10 @@ export class ContDeployDockerStack extends Stack {
       maxAzs: 2
     });
 
-
     // ECR repository
     const ecrRepository = new ecr.Repository(this, repoName, {
       repositoryName: repoName,
     });
-
 
     var s3Bucket = this.createArtifactBucket("my-s3bucket", "my-s3bucket-" + this.account);
     var pipelineProject = this.createPipelineProject(s3Bucket, ecrRepository);
@@ -63,12 +59,6 @@ export class ContDeployDockerStack extends Stack {
           stageName: 'Deploy',
           actions: [ecsDeployAction]
         },
-        /*
-        {
-            stageName: 'Notify',
-            actions: [postToSlackAction]
-        }
-        */
       ],
       pipelineName: "my_pipeline",
       //artifactBucket: artifactBucket
@@ -212,7 +202,6 @@ export class ContDeployDockerStack extends Stack {
     })
   };
 
-
   createLoadBalancedFargateService(scope: Construct, vpc: Vpc, ecrRepository: ecr.Repository) {
     return new ecspatterns.ApplicationLoadBalancedFargateService(scope, 'myLbFargateService', {
       vpc: vpc,
@@ -227,5 +216,4 @@ export class ContDeployDockerStack extends Stack {
       },
     });
   }
-
 }
