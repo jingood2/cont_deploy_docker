@@ -189,7 +189,7 @@ export class ContDeployDockerStack extends Stack {
       // listenerPort: 8080,  
       taskImageOptions: {
         containerName: repoName,
-        image: ecs.ContainerImage.fromRegistry("hello-world"),
+        image: ecs.ContainerImage.fromRegistry("okaycloud/dummywebserver:latest"),
         containerPort: 8080,
       },
     });
